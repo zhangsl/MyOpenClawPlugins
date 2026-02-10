@@ -1,0 +1,24 @@
+{
+  "id": "bocha-search",
+  "name": "博查搜索",
+  "description": "使用博查AI搜索获取实时网络信息，支持中文搜索和长文本摘要",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "defaultCount": {
+        "type": "number",
+        "description": "默认返回结果数量",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 10
+      },
+      "timeout": {
+        "type": "number",
+        "description": "请求超时时间（毫秒）",
+        "default": 30000
+      }
+    }
+  },
+  "skills": ["./skills"]
+}
