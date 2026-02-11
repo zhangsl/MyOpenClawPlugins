@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginAPI } from "@openclaw/core";
+import type { OpenClawPluginApi } from "@openclaw/core";
 
 // 博查搜索响应类型
 interface BochaWebPage {
@@ -23,6 +23,7 @@ interface BochaSearchResponse {
 
 // Plugin 配置类型
 interface BochaConfig {
+  apiKey?: string;
   defaultCount?: number;
   timeout?: number;
 }
@@ -37,16 +38,9 @@ async function bochaWebSearch(
     count?: number;
     summary?: boolean;
   },
-  config: BochaConfig
+  config: BochaConfig,
+  apiKey: string,
 ): Promise<string> {
-  const apiKey = process.env.BOCHA_API_KEY;
-
-  if (!apiKey) {
-    throw new Error(
-      "缺少博查 API Key。请设置环境变量 BOCHA_API_KEY"
-    );
-  }
-
   const query = params.query;
   if (!query || query.trim().length === 0) {
     throw new Error("搜索关键词 query 不能为空");
@@ -62,7 +56,7 @@ async function bochaWebSearch(
   const controller = new AbortController();
   const timeoutId = setTimeout(
     () => controller.abort(),
-    config.timeout || 30000
+    config.timeout || 30000,
   );
 
   try {
@@ -99,10 +93,7 @@ async function bochaWebSearch(
     // 格式化输出
     const formatted = results
       .map((item, index) => {
-        const parts = [
-          `[${index + 1}] ${item.name}`,
-          `URL: ${item.url}`,
-        ];
+        const parts = [`[${index + 1}] ${item.name}`, `URL: ${item.url}`];
 
         const metaParts: string[] = [];
         if (item.siteName) metaParts.push(item.siteName);
@@ -112,7 +103,9 @@ async function bochaWebSearch(
         }
 
         const content = item.summary || item.snippet || "无摘要";
-        parts.push(`摘要: ${content.substring(0, 300)}${content.length > 300 ? "..." : ""}`);
+        parts.push(
+          `摘要: ${content.substring(0, 300)}${content.length > 300 ? "..." : ""}`,
+        );
 
         return parts.join("\n");
       })
@@ -135,80 +128,76 @@ async function bochaWebSearch(
 /**
  * Plugin 注册函数
  */
-export default function register(api: OpenClawPluginAPI, config?: BochaConfig) {
-  // 定义 Tool 参数 Schema
-  const BochaSearchSchema = Type.Object({
-    query: Type.String({
-      description: "搜索关键词，支持自然语言查询",
-    }),
-    freshness: Type.Optional(
-      Type.String({
-        description:
-          "搜索结果时间范围: oneDay(一天内), oneWeek(一周内), oneMonth(一月内), oneYear(一年内), noLimit(不限)",
-        default: "noLimit",
-      })
-    ),
-    count: Type.Optional(
-      Type.Number({
-        description: "返回结果数量，范围 1-10",
-        minimum: 1,
-        maximum: 10,
-        default: config?.defaultCount || 5,
-      })
-    ),
-    summary: Type.Optional(
-      Type.Boolean({
-        description: "是否返回长文本摘要",
-        default: true,
-      })
-    ),
-  });
+export default function register(api: OpenClawPluginApi) {
+  const config = (api.pluginConfig || {}) as BochaConfig;
 
-  // 注册博查搜索 Tool
   api.registerTool({
     name: "bocha_web_search",
     description:
       "使用博查AI搜索获取实时网络信息。支持中文搜索，可获取长文本摘要。适用于查找中文网页、新闻、知识等内容。",
-    parameters: BochaSearchSchema,
-    async execute(_toolCallId: string, args: unknown) {
-      const params = args as {
-        query: string;
-        freshness?: string;
-        count?: number;
-        summary?: boolean;
-      };
+    parameters: Type.Object({
+      query: Type.String({
+        description: "搜索关键词，支持自然语言查询",
+      }),
+      freshness: Type.Optional(
+        Type.String({
+          description:
+            "搜索结果时间范围: oneDay(一天内), oneWeek(一周内), oneMonth(一月内), oneYear(一年内), noLimit(不限)",
+          default: "noLimit",
+        }),
+      ),
+      count: Type.Optional(
+        Type.Number({
+          description: "返回结果数量，范围 1-10",
+          minimum: 1,
+          maximum: 10,
+          default: config?.defaultCount || 5,
+        }),
+      ),
+      summary: Type.Optional(
+        Type.Boolean({
+          description: "是否返回长文本摘要",
+          default: true,
+        }),
+      ),
+    }),
+    async execute(_id: string, args: Record<string, unknown>) {
+      const apiKey = config.apiKey || process.env.BOCHA_API_KEY;
+      if (!apiKey) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "错误: 缺少博查 API Key。请在插件配置中设置 apiKey 或设置环境变量 BOCHA_API_KEY",
+            },
+          ],
+          isError: true,
+        };
+      }
 
       try {
-        const result = await bochaWebSearch(params, config || {});
+        const result = await bochaWebSearch(
+          {
+            query: String(args.query || ""),
+            freshness: args.freshness as string | undefined,
+            count: args.count as number | undefined,
+            summary: args.summary as boolean | undefined,
+          },
+          config,
+          apiKey,
+        );
 
         return {
           content: [{ type: "text", text: result }],
         };
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
         return {
           content: [{ type: "text", text: `搜索失败: ${errorMessage}` }],
           isError: true,
         };
       }
-    },
-  });
-
-  // 可选：注册 CLI 命令
-  api.registerCli?.({
-    command: "bocha.search <query>",
-    description: "使用博查搜索",
-    async action(query: string, options: { count?: number; freshness?: string }) {
-      const result = await bochaWebSearch(
-        {
-          query,
-          count: options.count,
-          freshness: options.freshness,
-        },
-        config || {}
-      );
-      console.log(result);
     },
   });
 }
